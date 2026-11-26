@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Order X-Ray</title>
+  <script>
+    (function () { // apply the saved theme before first paint
+      var t = null;
+      try { t = localStorage.getItem('xray:theme'); } catch (e) { }
+      if (t !== 'light' && t !== 'dark') t = window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="/static/css/xray.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>ORDER<b>X-RAY</b></div>
+    <div class="search">
+      <input id="q" type="search" placeholder="Search stocks" autocomplete="off" spellcheck="false" aria-label="Search stocks">
+      <kbd>/</kbd>
+      <ul id="qres" class="qres" role="listbox" hidden></ul>
+    </div>
+    <div class="pulse-wrap"><canvas id="pulse" aria-label="Market picture: every stock at its move for the day"></canvas></div>
+    <div class="counts">
+      <div class="cnt bull"><small>&#9650; BULLISH</small><b id="nBull">0</b></div>
+      <div class="cnt bear"><small>&#9660; BEARISH</small><b id="nBear">0</b></div>
+      <div class="breadth" title="Advancing vs declining (day change)"><i id="breadthUp"></i></div>
+    </div>
+    <button id="theme" class="theme-btn" type="button" aria-label="Switch to light mode" title="Switch to light mode">
+      <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4.2"/>
+        <path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/>
+      </svg>
+      <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20.5 14.6A8.5 8.5 0 0 1 9.4 3.5a8.5 8.5 0 1 0 11.1 11.1z"/>
+      </svg>
+    </button>
+    <div class="status">
+      <span id="phase" class="phase">&hellip;</span>
+      <span id="clock" class="clock"></span>
+      <span id="load" class="load"></span>
+    </div>
+  </header>
+  <div id="banner" class="banner" hidden></div>
+
+  <main id="stage" class="stage">
+    <canvas id="xray" class="xray" aria-hidden="true"></canvas>
+    <div id="xarea" class="xarea">
+      <div id="sectors" class="sectors"></div>
+    </div>
+    <section id="tilesBull" class="tiles bull" aria-label="Top bullish stocks"></section>
+    <section id="tilesBear" class="tiles bear" aria-label="Top bearish stocks"></section>
+    <section id="cardsBull" class="cards bull" aria-label="Bullish picks"></section>
+    <section id="cardsBear" class="cards bear" aria-label="Bearish picks"></section>
+  </main>
+
+  <div id="pop" class="pop" role="dialog" aria-live="polite" hidden></div>
+  <p class="disclaimer">Analytics tool for education. Not investment advice. F&amp;O trading involves substantial risk.</p>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
