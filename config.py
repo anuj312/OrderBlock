@@ -32,7 +32,7 @@ class Config:
     port: int = _int("PORT", 8010)
     api_key: str = os.getenv("KITE_API_KEY", "").strip()
     access_token: str = os.getenv("KITE_ACCESS_TOKEN", "").strip()
-    board_size: int = _int("BOARD_SIZE", 10)
+    board_size: int = _int("BOARD_SIZE", 20)
     picks: int = _int("PICKS", 3)
     sector_cap: int = _int("SECTOR_CAP", 2)
     publish_seconds: float = _float("PUBLISH_SECONDS", 2.0)

@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Order X-Ray</title>
   <script>
-    (function () { // apply the saved theme before first paint
+    (function () { // apply the saved theme before first paint; light unless the user chose dark
       var t = null;
       try { t = localStorage.getItem('xray:theme'); } catch (e) { }
-      if (t !== 'light' && t !== 'dark') t = window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      if (t !== 'light' && t !== 'dark') t = 'light';
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>

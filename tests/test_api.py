@@ -22,12 +22,12 @@ def make_client():
     return TestClient(app), core
 
 
-def test_board_has_top10_and_3_picks_per_side():
+def test_board_has_top20_and_3_picks_per_side():
     client, core = make_client()
     b = client.get("/api/board").json()
-    assert b["rules"] == {"board": 10, "picks": 3, "cap": 2}
+    assert b["rules"] == {"board": 20, "picks": 3, "cap": 2}
     for side in ("bull", "bear"):
-        assert len(b["boards"][side]) == 10
+        assert len(b["boards"][side]) == 20
         assert len(b["picks"][side]) <= 3
         assert set(b["picks"][side]) <= set(b["boards"][side])
         secs = [next(x["sec"] for x in b["stocks"] if x["s"] == s) for s in b["picks"][side]]

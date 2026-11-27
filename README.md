@@ -1,7 +1,7 @@
 # Order X-Ray
 
 A live order-block and liquidity terminal for NSE F&O stocks, built on Zerodha Kite Connect.
-It ranks every stock in `sectors.py` by one-directional intraday strength, shows the **top 10**
+It ranks every stock in `sectors.py` by one-directional intraday strength, shows the **top 20**
 on each side, and builds a trade card for the **top 3** per side.
 
 Read-only: it never places orders or changes anything in your Kite account.
@@ -35,7 +35,7 @@ day only reloads intraday candles (~1.5 min). Outside market hours it shows the 
 | Candles | 5-minute bars built from ticks, seeded from Kite historical. Order blocks use **closed** bars only |
 | Strength | `(price − open) / open / ADR50 × efficiency`. ADR50 = average daily range of the last 50 sessions; efficiency = net move ÷ path length (chop scores near 0) |
 | Side | Positive strength = bullish, negative = bearish. Percentile `p` is against the whole board |
-| Board | Top 10 per side (`BOARD_SIZE`) |
+| Board | Top 20 per side (`BOARD_SIZE`), tiles in columns of 3 / 4 / 5 / 8 from the cards outward |
 | Order block | Close beyond a swing high/low or the first 15-min range (break of structure). The move must leave a fair value gap or close beyond the block by ≥ 1 average candle. Block = last opposite-colour candle before the move. Invalid after any 5m close through its far side |
 | Levels | Zone = block edge → price; **Z** = middle of zone; stop = 0.06% beyond the block; targets = unbroken swing highs/lows, day high/low, previous-day high/low, opposing blocks (projected from ADR if none; marked `*`); amber extras = older blocks, swing points, day open, unfilled gap |
 | R:R | `(T2 − Z) / (Z − stop)` |
@@ -49,7 +49,7 @@ not a sector, so it doesn't count toward the sector cap. Stocks only listed in N
 ## Screen
 
 - **Header strip**: every stock as a dot at its day % (bullish above the line, bearish below). Board stocks glow, picks are ringed, event-risk stocks are amber. Lagging and leading sector at the ends.
-- **X-Ray**: one line per stock from 09:15 to now; vertical position is the stock's rank position (the axis shows strength values). Lines end in the ranked column, and flows carry the top 10 / bottom 10 into the tiles, then picks into the cards. Blue band = first 15 minutes, blue line = NIFTY 50 basket. Click a sector to highlight its stocks.
+- **X-Ray**: one line per stock from 09:15 to now; every line starts at the open and traces the stock's move in ADR units, spread so each half fills evenly (bullish above the split, bearish below). Lines end in the ranked column, and flows carry the top 20 / bottom 20 into the tiles, then picks into the cards. Blue band = first 15 minutes, blue line = NIFTY 50 basket. Click a sector to highlight its stocks.
 - **Tiles**: rank, day %, OI build-up, volume-at-price profile, rank change since the last minute.
 - **Cards**: the 3 picks per side with zone, stop, targets, risk %, R:R.
 - **Popup** (hover; tap on mobile; or search with `/`): 5m candles, VWAP, current block + zone, older blocks, all levels.

@@ -113,18 +113,26 @@
   }
 
   // ----------------------------------------------------------------- tiles
-  function columns(n) { // ranks per tile column, left -> right (small ranks sit next to the cards)
-    const c1 = Math.min(3, n), c2 = Math.min(3, n - c1), c3 = n - c1 - c2;
-    const r = (a, k) => Array.from({ length: k }, (_, i) => a + i);
-    return [c3 ? ['c3', r(c1 + c2 + 1, c3)] : null, c2 ? ['c2', r(c1 + 1, c2)] : null, ['c1', r(1, c1)]].filter(Boolean);
+  // Ranks per tile column. Column c1 (ranks 1-3, largest tiles) sits next to the pick cards;
+  // then 4-7, 8-12 and 13-20 going left, each column with more, smaller tiles.
+  const COL_SIZES = [3, 4, 5, 8];
+  const COL_FR = { c1: '1.3fr', c2: '1.05fr', c3: '.92fr', c4: '.82fr' };
+  function columns(n) {
+    const out = []; let start = 1;
+    COL_SIZES.forEach((sz, i) => {
+      const k = i === COL_SIZES.length - 1 ? n - start + 1 : Math.min(sz, n - start + 1);
+      if (k > 0) out.push(['c' + (i + 1), Array.from({ length: k }, (_, j) => start + j)]);
+      start += Math.max(0, k);
+    });
+    return out.reverse();
   }
   function buildTiles(el, n) {
     const cols = columns(n);
-    el.style.gridTemplateColumns = cols.map(([c]) => ({ c1: '1.2fr', c2: '.95fr', c3: '.78fr' }[c])).join(' ');
+    el.style.gridTemplateColumns = cols.map(([c]) => COL_FR[c]).join(' ');
     el.innerHTML = cols.map(([c, ranks]) =>
       `<div class="tcol ${c}" style="grid-template-rows:repeat(${ranks.length},1fr)">` +
       ranks.map(k => `<div class="tile empty" data-rank="${k}"><canvas class="vp"></canvas>
-        <div class="t-row"><span class="sym">–</span><span class="rk">${String(k).padStart(2, '0')}</span></div>
+        <div class="t-row">${c === 'c1' ? '<span class="t-logo"></span>' : ''}<span class="sym">–</span><span class="rk">${String(k).padStart(2, '0')}</span></div>
         <div class="t-chg"></div><div class="t-bu"></div><span class="dr"></span><div class="t-px"></div></div>`).join('') +
       '</div>').join('');
     el.dataset.n = n;
@@ -143,6 +151,11 @@
       t.classList.toggle('pick', picks.has(sym));
       t.classList.toggle('enter', entered.has(sym));
       $('.sym', t).textContent = sym;
+      const lg = $('.t-logo', t);
+      if (lg) {
+        lg.textContent = initials(sym);
+        lg.style.background = `linear-gradient(135deg,hsl(${hue(sym)} 70% 50%),hsl(${hue(sym)} 70% 30%))`;
+      }
       const c = $('.t-chg', t); c.textContent = pct(x.chg); c.className = 't-chg ' + (x.chg >= 0 ? 'up' : 'dn');
       $('.t-bu', t).innerHTML = x.bu ? esc(x.bu) + (k <= 3 ? `<span class="dots">${dots(x.cv)}</span>` : '') : '';
       $('.t-bu', t).style.display = x.bu ? '' : 'none';
@@ -260,7 +273,7 @@
     const ups = b.sectors.filter(s => s.chg >= 0).sort(byChg);
     const dns = b.sectors.filter(s => s.chg < 0).sort(byChg);
     const upEnd = top + ups.length * ROW;
-    let dnStart = Math.max(zero + 8, upEnd + 10);
+    let dnStart = Math.max(zero + 14, upEnd + 10); // leave the origin and split line visible
     if (dnStart + dns.length * ROW > bottom) dnStart = Math.max(upEnd + 10, bottom - dns.length * ROW);
     const items = [...ups.map((s, i) => ({ s, y: top + i * ROW })), ...dns.map((s, i) => ({ s, y: dnStart + i * ROW }))];
     el.style.setProperty('--secw', Math.round(g.secW - 10) + 'px');
@@ -295,12 +308,12 @@
       this.off.width = this.cv.width; this.off.height = this.cv.height;
       const o = this.off.getContext('2d'); o.setTransform(dpr, 0, 0, dpr, 0, 0); o.clearRect(0, 0, w, h);
       const L = ar.left - sr.left, T = ar.top - sr.top, W = ar.width, Hh = ar.height;
-      const secW = Math.round(Math.max(130, Math.min(200, W * 0.34)));
+      const secW = Math.round(Math.max(160, Math.min(200, W * 0.42)));
       const g = this.geom = {
         areaTop: T, left: L, right: L + W, axisX: L + 10, colX: L + W - 40, colW: 30,
         y0: T + 18, y1: T + Hh - 24, secW,
       };
-      g.x0 = L + 22 + secW + 10;
+      g.x0 = g.axisX + 14; // lines start at the open, under the sector list
       g.x1 = g.colX - 8;
       const plotW = g.x1 - g.x0;
       g.xf = g.x1 - Math.max(36, Math.min(80, plotW * 0.14)); // "now": lines then curve into their rank row
@@ -323,44 +336,59 @@
       for (const x of b.stocks) {
         for (const v of [...(hist[x.s] || []), cur(x)]) { if (v > 0) pos.push(v); else if (v < 0) neg.push(-v); }
       }
-      const q = (a, p) => { if (!a.length) return 1; a.sort((m, k) => m - k); return a[Math.min(a.length - 1, Math.floor(p * a.length))] || 1; };
-      const K = 0.2, mp = Math.asinh(q(pos, 1) * 1.04 / K), mn = Math.asinh(q(neg, 1) * 1.04 / K);
-      const pad = 6;
+      // Value scale: each side uses the empirical distribution of every value drawn today, so the
+      // lines fill their half evenly (dense fabric) while each path keeps its own shape (monotone map).
+      pos.sort((m, k) => m - k); neg.sort((m, k) => m - k);
+      const cdf = (a, v) => { // fraction of a below v, linearly interpolated, 0 at v=0
+        if (!a.length) return 0;
+        let lo = 0, hi = a.length;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (a[mid] < v) lo = mid + 1; else hi = mid; }
+        const prev = lo ? a[lo - 1] : 0, next = lo < a.length ? a[lo] : prev;
+        const f = next > prev ? (v - prev) / (next - prev) : 1;
+        return Math.min(1, (lo + Math.max(0, Math.min(1, f))) / a.length);
+      };
+      const pad = 4;
       const yv = v => v >= 0
-        ? Math.max(g.y0 + 2, yz - Math.min(1, Math.asinh(v / K) / mp) * (yz - g.y0 - pad))
-        : Math.min(g.y1 - 2, yz + Math.min(1, Math.asinh(-v / K) / mn) * (g.y1 - yz - pad));
+        ? Math.max(g.y0 + 2, yz - Math.pow(cdf(pos, v), 0.9) * (yz - g.y0 - pad))
+        : Math.min(g.y1 - 2, yz + Math.pow(cdf(neg, -v), 0.9) * (g.y1 - yz - pad));
       this.yv = yv;
+      const light = theme() === 'light';
 
       // panel + side tint
       o.fillStyle = C.plot; o.fillRect(L, T, W, Hh);
       const tb = o.createLinearGradient(0, g.y0, 0, yz);
-      tb.addColorStop(0, A(C.bullRgb, 0.07)); tb.addColorStop(1, A(C.bullRgb, 0));
+      tb.addColorStop(0, A(C.bullRgb, light ? 0.04 : 0.07)); tb.addColorStop(1, A(C.bullRgb, 0));
       o.fillStyle = tb; o.fillRect(g.x0, g.y0, g.x1 - g.x0, yz - g.y0);
       const tr = o.createLinearGradient(0, yz, 0, g.y1);
-      tr.addColorStop(0, A(C.bearRgb, 0)); tr.addColorStop(1, A(C.bearRgb, 0.07));
+      tr.addColorStop(0, A(C.bearRgb, 0)); tr.addColorStop(1, A(C.bearRgb, light ? 0.04 : 0.07));
       o.fillStyle = tr; o.fillRect(g.x0, yz, g.x1 - g.x0, g.y1 - yz);
       o.strokeStyle = C.grid; o.lineWidth = 1; o.strokeRect(L + 0.5, T + 0.5, W - 1, Hh - 1);
-      // faint horizontal guides at half of each side
-      o.setLineDash([2, 6]); o.strokeStyle = C.grid;
-      for (const y of [(g.y0 + yz) / 2, (yz + g.y1) / 2]) { o.beginPath(); o.moveTo(g.x0, y); o.lineTo(g.xf, y); o.stroke(); }
-      o.setLineDash([]);
-      // opening 15 minutes
-      o.fillStyle = A('61,123,255', 0.07); o.fillRect(X(b.t0), g.y0, Math.max(2, X(b.t0 + 900) - X(b.t0)), H);
-      // hour guides + labels
-      o.font = '500 9px JetBrains Mono, monospace'; o.textAlign = 'center'; o.fillStyle = C.muted;
-      o.setLineDash([2, 4]);
-      for (let t = b.t0 + 2700; t < now; t += 3600) {
-        const x = X(t); o.strokeStyle = C.grid; o.beginPath(); o.moveTo(x, g.y0); o.lineTo(x, g.y1); o.stroke();
-        if (g.xf - x > 34) o.fillText(hhmm(t), x, g.y1 + 14);
+      // chart-paper grid: horizontal rules, vertical rule every 15 minutes, stronger on the hour
+      o.lineWidth = 1;
+      const rows = 16;
+      for (let i = 1; i < rows; i++) {
+        const y = Math.round(g.y0 + i * H / rows) + 0.5;
+        o.strokeStyle = A(C.ink, light ? 0.05 : 0.035); o.beginPath(); o.moveTo(g.x0, y); o.lineTo(g.x1, y); o.stroke();
       }
+      for (let t = b.t0 + 900; t < now; t += 900) {
+        const x = Math.round(X(t)) + 0.5, hour = (t - b.t0 + 900) % 3600 === 0;
+        o.strokeStyle = A(C.ink, hour ? (light ? 0.13 : 0.08) : (light ? 0.05 : 0.035));
+        o.beginPath(); o.moveTo(x, g.y0); o.lineTo(x, g.y1); o.stroke();
+      }
+      // opening 15 minutes
+      o.fillStyle = A('61,123,255', light ? 0.05 : 0.07); o.fillRect(X(b.t0), g.y0, Math.max(2, X(b.t0 + 900) - X(b.t0)), H);
+      // hour labels
+      o.font = '500 9px JetBrains Mono, monospace'; o.textAlign = 'center'; o.fillStyle = C.muted;
+      for (let t = b.t0 + 2700; t < now; t += 3600) if (g.xf - X(t) > 34) o.fillText(hhmm(t), X(t), g.y1 + 14);
+      o.setLineDash([2, 4]);
       o.strokeStyle = A(C.ink, 0.25); o.beginPath(); o.moveTo(g.xf, g.y0); o.lineTo(g.xf, g.y1); o.stroke();
       o.setLineDash([]);
       o.fillStyle = C.strong; o.font = '700 9.5px JetBrains Mono, monospace'; o.fillText(hhmm(b.status.now), g.xf, g.y1 + 14);
       // split line + side rail (no axis numbers)
-      o.strokeStyle = A(C.ink, 0.28); o.setLineDash([4, 4]);
-      o.beginPath(); o.moveTo(g.axisX, yz); o.lineTo(g.right - 4, yz); o.stroke(); o.setLineDash([]);
-      o.fillStyle = C.bull; o.fillRect(g.axisX, g.y0, 2, yz - g.y0);
-      o.fillStyle = C.bear; o.fillRect(g.axisX, yz, 2, g.y1 - yz);
+      o.strokeStyle = A(C.ink, light ? 0.55 : 0.3); o.lineWidth = 1;
+      o.beginPath(); o.moveTo(g.axisX, yz + 0.5); o.lineTo(g.right - 4, yz + 0.5); o.stroke();
+      o.fillStyle = C.bull; o.fillRect(g.axisX, g.y0, 3, yz - g.y0);
+      o.fillStyle = C.bear; o.fillRect(g.axisX, yz, 3, g.y1 - yz);
 
       // stock lines: smooth curve from the open to now, then a bend into the stock's rank row
       const boardSet = new Set([...b.boards.bull, ...b.boards.bear]);
@@ -393,8 +421,8 @@
       o.globalCompositeOperation = theme() === 'dark' ? 'lighter' : 'source-over';
       for (const x of b.stocks) {
         if (boardSet.has(x.s) || inHl(x)) continue;
-        o.strokeStyle = A(sideRgb(x), hl ? 0.03 : (theme() === 'dark' ? 0.11 : C.dim));
-        o.lineWidth = 0.9; trace(pathOf(x), rowY(rankIdx.get(x.s)));
+        o.strokeStyle = A(sideRgb(x), hl ? 0.03 : (light ? C.dim : 0.11));
+        o.lineWidth = light ? 0.7 : 0.9; trace(pathOf(x), rowY(rankIdx.get(x.s)));
       }
       o.globalCompositeOperation = 'source-over';
       const front = b.stocks.filter(x => boardSet.has(x.s) || inHl(x));
@@ -403,11 +431,13 @@
         const pk = pickSet.has(x.s), isHl = inHl(x) && !boardSet.has(x.s);
         const pts = pathOf(x), endY = rowY(rankIdx.get(x.s));
         o.globalAlpha = hl && !inHl(x) ? 0.25 : 1;
-        // soft halo, then the crisp line
-        o.strokeStyle = A(isHl ? C.ink : sideRgb(x), pk ? 0.22 : 0.12);
-        o.lineWidth = pk ? 6 : 4; trace(pts, endY);
-        o.strokeStyle = isHl ? A(C.ink, 0.8) : side(x);
-        o.lineWidth = pk ? 1.9 : 1.2; o.shadowColor = side(x); o.shadowBlur = (pk ? 10 : 4) * C.glow;
+        // soft halo (picks only in light mode), then the crisp line
+        if (pk || !light) {
+          o.strokeStyle = A(isHl ? C.ink : sideRgb(x), pk ? (light ? 0.16 : 0.22) : 0.12);
+          o.lineWidth = pk ? 5 : 4; trace(pts, endY);
+        }
+        o.strokeStyle = isHl ? A(C.ink, 0.8) : (light && !pk ? A(sideRgb(x), 0.62) : side(x));
+        o.lineWidth = pk ? 1.7 : (light ? 0.95 : 1.2); o.shadowColor = side(x); o.shadowBlur = (pk ? 10 : 4) * C.glow;
         trace(pts, endY); o.shadowBlur = 0;
       }
       o.globalAlpha = 1;
@@ -478,6 +508,22 @@
         o.beginPath(); o.moveTo(...p0); o.bezierCurveTo(...p1, ...p2, ...p3); o.stroke();
       }
       o.shadowBlur = 0;
+      // blue split connector: column zero -> gap between bull and bear tiles
+      if (tilesRight) {
+        const rb = rel($('#tilesBull')), rr = rel($('#tilesBear')), cb = rel($('#cardsBull'));
+        const p0 = [g.colX + g.colW + 3, yz], gy = (rb.t + rb.h + rr.t) / 2, p3 = [rb.l, gy], dx = (p3[0] - p0[0]) * 0.5;
+        o.strokeStyle = C.blue; o.lineWidth = 2; o.shadowColor = C.blue; o.shadowBlur = 6 * C.glow;
+        o.beginPath(); o.moveTo(...p0); o.bezierCurveTo(p0[0] + dx, p0[1], p3[0] - dx, gy, ...p3); o.lineTo(cb.l - 6, gy); o.stroke();
+        o.shadowBlur = 0;
+        const n50s = b.sectors.find(s => s.index);
+        o.fillStyle = C.blue; o.beginPath(); o.arc(p0[0], p0[1], 3.5, 0, 7); o.fill();
+        if (n50s) {
+          o.font = '700 9px JetBrains Mono, monospace'; o.textAlign = 'left';
+          o.fillText(pct(n50s.chg), p0[0] + 6, p0[1] - 5);
+        }
+      }
+      // origin: every stock starts at 0 at the open
+      o.fillStyle = C.strong; o.beginPath(); o.arc(X(b.t0), yz, 3.2, 0, 7); o.fill();
       this.ends = b.stocks.filter(x => pickSet.has(x.s)).map(x => ({ x: X(now), y: yv(cur(x)), col: side(x) }));
     },
     frame(ts) {
@@ -491,9 +537,10 @@
       // x-ray sweep across the plot
       const span = g.xf - g.x0, sx = g.x0 + ((s / 6) % 1) * span;
       const gr = ctx.createLinearGradient(sx - 60, 0, sx, 0);
-      gr.addColorStop(0, A(C.sweep, 0)); gr.addColorStop(1, A(C.sweep, 0.10));
+      const lt = theme() === 'light';
+      gr.addColorStop(0, A(C.sweep, 0)); gr.addColorStop(1, A(C.sweep, lt ? 0.05 : 0.10));
       ctx.fillStyle = gr; ctx.fillRect(sx - 60, g.y0, 60, g.y1 - g.y0);
-      ctx.fillStyle = A(C.sweep, 0.4); ctx.fillRect(sx, g.y0, 1, g.y1 - g.y0);
+      ctx.fillStyle = A(C.sweep, lt ? 0.22 : 0.4); ctx.fillRect(sx, g.y0, 1, g.y1 - g.y0);
       // particles on flow links
       for (const lk of this.links) {
         for (let q = 0; q < (lk.card ? 3 : 2); q++) {
@@ -576,7 +623,7 @@
   function closePop() { $('#pop').hidden = true; S.pop = null; }
   async function openPop(sym, anchor, pinned) {
     S.pop = { sym, anchor, pinned };
-    try { renderPop(await getChart(sym, pinned ? 0 : 4000)); } catch (e) { /* not ready */ }
+    try { renderPop(await getChart(sym, pinned ? 0 : 4000)); } catch (e) { console.warn('popup', sym, e); }
   }
   async function refreshPop() {
     const p = S.pop; if (!p) return;

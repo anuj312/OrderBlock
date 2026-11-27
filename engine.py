@@ -18,7 +18,7 @@ from sectors import NIFTY50, SECTORS, display_name
 
 @dataclass(frozen=True)
 class Rules:
-    board_size: int = 10        # stocks per side on the board
+    board_size: int = 20        # stocks per side on the board
     picks: int = 3              # trade cards per side
     sector_cap: int = 2         # max picks from one sector per side
     adr_sessions: int = 50      # "normal daily range" lookback
