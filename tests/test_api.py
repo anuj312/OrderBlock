@@ -50,3 +50,14 @@ def test_no_credentials_in_responses(monkeypatch):
     for secret in (core.cfg.api_key, core.cfg.access_token):
         if secret:
             assert secret not in body
+
+
+def test_responses_are_gzipped_for_browsers():
+    client, core = make_client()
+    for url in ("/api/board", "/api/history", "/", "/static/js/app.js", "/static/css/xray.css"):
+        r = client.get(url, headers={"Accept-Encoding": "gzip"})
+        assert r.status_code == 200
+        assert r.headers.get("content-encoding") == "gzip", url
+    # clients that don't ask for gzip still get plain JSON
+    r = client.get("/api/board", headers={"Accept-Encoding": "identity"})
+    assert "content-encoding" not in r.headers and r.json()["rules"]["board"] == 20

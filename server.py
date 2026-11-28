@@ -13,6 +13,7 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -79,6 +80,9 @@ def create_app(cfg: Config | None = None, start_feed: bool = True) -> FastAPI:
 
     api = FastAPI(title="Order X-Ray", lifespan=lifespan, docs_url=None, redoc_url=None)
     api.state.core = core
+    # Compress JSON, HTML, JS and CSS for clients that send Accept-Encoding: gzip (all browsers).
+    # Board JSON (~110 KB every 2 s) shrinks to roughly a fifth. Tiny responses are left as is.
+    api.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
     no_store = {"Cache-Control": "no-store"}
 
     @api.get("/")

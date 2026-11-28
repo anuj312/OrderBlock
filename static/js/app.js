@@ -15,8 +15,8 @@
       bull: '#0a9e58', bear: '#de2848', amber: '#c97a00', yellow: '#b88600', blue: '#2a62e6',
       text: '#1d2a25', muted: '#64746d', strong: '#0b1512', grid: 'rgba(20,60,45,0.09)',
       bullRgb: '10,158,88', bearRgb: '222,40,72', ink: '15,30,25', shade: '255,255,255',
-      plot: 'rgba(255,255,255,0.72)', glow: 0.25, sweep: '10,158,88', dot: null,
-      candleUp: '#0a9e58', candleUp2: '#0a9e58', candleDn: '#de2848', dim: 0.24, vp: 0.34,
+      plot: '#ffffff', glow: 0.25, sweep: '10,158,88', dot: null,
+      candleUp: '#0a9e58', candleUp2: '#0a9e58', candleDn: '#de2848', dim: 0.3, vp: 0.34,
     },
   };
   const theme = () => (document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark');
@@ -24,6 +24,7 @@
   const A = (rgb, a) => `rgba(${rgb},${a})`;
   const sideRgb = x => (x.side === 'bull' ? C.bullRgb : C.bearRgb);
   const POLL_MS = 2000;
+  const RM = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const SESSION_SEC = 22500; // 09:15 -> 15:30
   const S = { board: null, hist: null, histKey: null, by: {}, charts: {}, hlSector: null, pop: null, mobile: false };
 
@@ -295,18 +296,23 @@
 
   // ----------------------------------------------------------------- x-ray canvas
   const xray = {
-    cv: null, off: null, links: [], geom: null, sorted: [], t0: 0,
+    cv: null, off: null, lc: null, links: [], comets: [], geom: null, sorted: [], t0: 0,
+    revealKey: null, revealAt: 0,
     init() {
-      this.cv = $('#xray'); this.off = document.createElement('canvas');
+      this.cv = $('#xray'); this.off = document.createElement('canvas'); this.lc = document.createElement('canvas');
       requestAnimationFrame(ts => this.frame(ts));
     },
+    replay() { this.revealAt = performance.now(); },
     rebuild() {
       const b = S.board; if (!b) return;
       const stage = $('#stage'), sr = stage.getBoundingClientRect(), ar = $('#xarea').getBoundingClientRect();
       this.cv.style.width = sr.width + 'px'; this.cv.style.height = stage.scrollHeight + 'px';
       const { w, h, dpr } = fitCanvas(this.cv);
       this.off.width = this.cv.width; this.off.height = this.cv.height;
-      const o = this.off.getContext('2d'); o.setTransform(dpr, 0, 0, dpr, 0, 0); o.clearRect(0, 0, w, h);
+      let o = this.off.getContext('2d'); o.setTransform(dpr, 0, 0, dpr, 0, 0); o.clearRect(0, 0, w, h);
+      // stock lines go on their own layer so frame() can draw them in (reveal animation)
+      this.lc.width = this.cv.width; this.lc.height = this.cv.height;
+      const lineCtx = this.lc.getContext('2d'); lineCtx.setTransform(dpr, 0, 0, dpr, 0, 0); lineCtx.clearRect(0, 0, w, h);
       const L = ar.left - sr.left, T = ar.top - sr.top, W = ar.width, Hh = ar.height;
       const secW = Math.round(Math.max(160, Math.min(200, W * 0.42)));
       const g = this.geom = {
@@ -328,41 +334,46 @@
       g.X = X;
       const rowY = i => g.y0 + (i + 0.5) * rowH;
 
-      // value scale: asinh-compressed strength, bull half above the split, bear half below
-      // lines trace each stock's price path in ADR units (smooth); rank still decides the column row
+      // Value scale (the X-Ray "fan"): every line starts at 0 at the open, and the fan opens as the
+      // market spreads out. At each 5-minute step a value is scaled by the spread reached so far
+      // (running max of the 97th percentile per side): the fan is narrow early, widens through the
+      // morning, then each half fills evenly. Within a step the map is monotone, so order is kept.
+      // Lines trace each stock's price path in ADR units; rank decides the column row.
       const hist = S.hist && S.hist.t0 === b.t0 ? (S.hist.path || S.hist.bars) : {};
       const cur = x => (x.adr ? x.mv / x.adr : x.sc);
-      const pos = [], neg = [];
-      for (const x of b.stocks) {
-        for (const v of [...(hist[x.s] || []), cur(x)]) { if (v > 0) pos.push(v); else if (v < 0) neg.push(-v); }
+      const KN = Math.max(0, ...b.stocks.map(x => (hist[x.s] || []).length)); // step KN = now
+      const valAt = (x, k) => (k >= KN ? cur(x) : (hist[x.s] || [])[k]);
+      const q97 = a => { if (!a.length) return 0; a.sort((m, c) => m - c); return a[Math.floor(0.97 * (a.length - 1))]; };
+      const sp = new Float64Array(KN + 1), sn = new Float64Array(KN + 1);
+      for (let k = 0; k <= KN; k++) {
+        const p = [], q = [];
+        for (const x of b.stocks) { const v = valAt(x, k); if (v == null) continue; if (v > 0) p.push(v); else if (v < 0) q.push(-v); }
+        sp[k] = Math.max(k ? sp[k - 1] : 0, q97(p));
+        sn[k] = Math.max(k ? sn[k - 1] : 0, q97(q));
       }
-      // Value scale: each side uses the empirical distribution of every value drawn today, so the
-      // lines fill their half evenly (dense fabric) while each path keeps its own shape (monotone map).
-      pos.sort((m, k) => m - k); neg.sort((m, k) => m - k);
-      const cdf = (a, v) => { // fraction of a below v, linearly interpolated, 0 at v=0
-        if (!a.length) return 0;
-        let lo = 0, hi = a.length;
-        while (lo < hi) { const mid = (lo + hi) >> 1; if (a[mid] < v) lo = mid + 1; else hi = mid; }
-        const prev = lo ? a[lo - 1] : 0, next = lo < a.length ? a[lo] : prev;
-        const f = next > prev ? (v - prev) / (next - prev) : 1;
-        return Math.min(1, (lo + Math.max(0, Math.min(1, f))) / a.length);
+      const SP = sp[KN] || 1, SN = sn[KN] || 1, KC = 0.35, GN = Math.asinh(1.12 / KC), pad = 4;
+      const shape = u => Math.min(1, Math.asinh(Math.max(0, u) / KC) / GN); // spreads small moves out
+      const env = (s, S) => Math.pow(Math.max(0, Math.min(1, s / S)), 0.8);   // fan opening at a step
+      const yAt = (v, k) => {
+        k = Math.max(0, Math.min(KN, k));
+        if (v >= 0) { const s = sp[k]; return s ? yz - env(s, SP) * shape(v / s) * (yz - g.y0 - pad) : yz; }
+        const s = sn[k]; return s ? yz + env(s, SN) * shape(-v / s) * (g.y1 - yz - pad) : yz;
       };
-      const pad = 4;
-      const yv = v => v >= 0
-        ? Math.max(g.y0 + 2, yz - Math.pow(cdf(pos, v), 0.9) * (yz - g.y0 - pad))
-        : Math.min(g.y1 - 2, yz + Math.pow(cdf(neg, -v), 0.9) * (g.y1 - yz - pad));
+      const yv = v => yAt(v, KN);
       this.yv = yv;
       const light = theme() === 'light';
 
       // panel + side tint
-      o.fillStyle = C.plot; o.fillRect(L, T, W, Hh);
+      const RAD = 14;
+      const panel = () => { o.beginPath(); if (o.roundRect) o.roundRect(L + 0.5, T + 0.5, W - 1, Hh - 1, RAD); else o.rect(L + 0.5, T + 0.5, W - 1, Hh - 1); };
+      o.fillStyle = C.plot; panel(); o.fill();
       const tb = o.createLinearGradient(0, g.y0, 0, yz);
       tb.addColorStop(0, A(C.bullRgb, light ? 0.04 : 0.07)); tb.addColorStop(1, A(C.bullRgb, 0));
       o.fillStyle = tb; o.fillRect(g.x0, g.y0, g.x1 - g.x0, yz - g.y0);
       const tr = o.createLinearGradient(0, yz, 0, g.y1);
       tr.addColorStop(0, A(C.bearRgb, 0)); tr.addColorStop(1, A(C.bearRgb, light ? 0.04 : 0.07));
       o.fillStyle = tr; o.fillRect(g.x0, yz, g.x1 - g.x0, g.y1 - yz);
-      o.strokeStyle = C.grid; o.lineWidth = 1; o.strokeRect(L + 0.5, T + 0.5, W - 1, Hh - 1);
+      o.strokeStyle = C.grid; o.lineWidth = 1; panel(); o.stroke();
       // chart-paper grid: horizontal rules, vertical rule every 15 minutes, stronger on the hour
       o.lineWidth = 1;
       const rows = 16;
@@ -396,10 +407,32 @@
       const rankIdx = new Map(b.stocks.map((x, i) => [x.s, i]));
       const pathOf = x => {
         const pts = [[X(b.t0), yz]];
-        (hist[x.s] || []).forEach((v, k) => { if (v != null) pts.push([X(b.t0 + (k + 1) * 300), yv(v)]); });
+        (hist[x.s] || []).forEach((v, k) => { if (v != null) pts.push([X(b.t0 + (k + 1) * 300), yAt(v, k)]); });
         pts.push([X(now), yv(cur(x))]);
         return pts;
       };
+      // ---- everything from here to the ranked column is drawn on the line layer
+      const baseCtx = o; o = lineCtx;
+      // fan envelope: soft fill showing how far each side has opened at every step
+      const envPts = sgn => {
+        const out = [[X(b.t0), yz]];
+        for (let k = 0; k <= KN; k++) {
+          const t = k >= KN ? now : b.t0 + (k + 1) * 300;
+          out.push([X(t), sgn > 0 ? yz - env(sp[k], SP) * (yz - g.y0 - pad) : yz + env(sn[k], SN) * (g.y1 - yz - pad)]);
+        }
+        return out;
+      };
+      for (const sgn of [1, -1]) {
+        const pts = envPts(sgn), rgb = sgn > 0 ? C.bullRgb : C.bearRgb;
+        const gr = o.createLinearGradient(0, sgn > 0 ? g.y0 : g.y1, 0, yz);
+        gr.addColorStop(0, A(rgb, light ? 0.10 : 0.07)); gr.addColorStop(1, A(rgb, light ? 0.02 : 0.01));
+        o.beginPath(); o.moveTo(pts[0][0], pts[0][1]);
+        pts.forEach(p => o.lineTo(p[0], p[1]));
+        o.lineTo(pts[pts.length - 1][0], yz); o.closePath();
+        o.fillStyle = gr; o.fill();
+        o.strokeStyle = A(rgb, light ? 0.35 : 0.3); o.lineWidth = 1; o.setLineDash([3, 3]);
+        o.beginPath(); pts.forEach((p, i) => (i ? o.lineTo(p[0], p[1]) : o.moveTo(p[0], p[1]))); o.stroke(); o.setLineDash([]);
+      }
       const trace = (pts, endY) => {
         o.beginPath(); o.moveTo(pts[0][0], pts[0][1]);
         for (let i = 1; i < pts.length - 1; i++) {
@@ -421,24 +454,32 @@
       o.globalCompositeOperation = theme() === 'dark' ? 'lighter' : 'source-over';
       for (const x of b.stocks) {
         if (boardSet.has(x.s) || inHl(x)) continue;
-        o.strokeStyle = A(sideRgb(x), hl ? 0.03 : (light ? C.dim : 0.11));
-        o.lineWidth = light ? 0.7 : 0.9; trace(pathOf(x), rowY(rankIdx.get(x.s)));
+        o.strokeStyle = A(sideRgb(x), hl ? 0.03 : (light ? C.dim : 0.12));
+        o.lineWidth = light ? 0.85 : 0.95; trace(pathOf(x), rowY(rankIdx.get(x.s)));
       }
       o.globalCompositeOperation = 'source-over';
       const front = b.stocks.filter(x => boardSet.has(x.s) || inHl(x));
       front.sort((a, c) => (pickSet.has(a.s) ? 1 : 0) - (pickSet.has(c.s) ? 1 : 0)); // picks on top
+      this.comets = [];
+      const topSet = new Set([...b.boards.bull.slice(0, 5), ...b.boards.bear.slice(0, 5)]);
       for (const x of front) {
         const pk = pickSet.has(x.s), isHl = inHl(x) && !boardSet.has(x.s);
         const pts = pathOf(x), endY = rowY(rankIdx.get(x.s));
         o.globalAlpha = hl && !inHl(x) ? 0.25 : 1;
-        // soft halo (picks only in light mode), then the crisp line
+        // soft halo, then the crisp line
         if (pk || !light) {
-          o.strokeStyle = A(isHl ? C.ink : sideRgb(x), pk ? (light ? 0.16 : 0.22) : 0.12);
-          o.lineWidth = pk ? 5 : 4; trace(pts, endY);
+          o.strokeStyle = A(isHl ? C.ink : sideRgb(x), pk ? (light ? 0.18 : 0.22) : 0.12);
+          o.lineWidth = pk ? 6 : 4; trace(pts, endY);
         }
-        o.strokeStyle = isHl ? A(C.ink, 0.8) : (light && !pk ? A(sideRgb(x), 0.62) : side(x));
-        o.lineWidth = pk ? 1.7 : (light ? 0.95 : 1.2); o.shadowColor = side(x); o.shadowBlur = (pk ? 10 : 4) * C.glow;
+        o.strokeStyle = isHl ? A(C.ink, 0.8) : (light && !pk ? A(sideRgb(x), 0.7) : side(x));
+        o.lineWidth = pk ? 2.1 : (light ? 1.15 : 1.25); o.shadowColor = side(x); o.shadowBlur = (pk ? 10 : 4) * C.glow;
         trace(pts, endY); o.shadowBlur = 0;
+        if ((pk || topSet.has(x.s)) && !hl) { // light streaks travel along the leaders' paths
+          const path = [...pts, [(pts[pts.length - 1][0] + g.colX) / 2, (pts[pts.length - 1][1] + endY) / 2], [g.colX - 2, endY]];
+          const cum = [0];
+          for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]));
+          this.comets.push({ path, cum, len: cum[cum.length - 1], col: side(x), pick: pk, sp: pk ? 0.16 : 0.11, ph: (hue(x.s) % 100) / 100 });
+        }
       }
       o.globalAlpha = 1;
       // NIFTY 50 basket average (index reference)
@@ -448,7 +489,7 @@
         const pts = [[X(b.t0), yz]];
         for (let i = 0; i < k; i++) {
           const vals = n50.map(x => (hist[x.s] || [])[i]).filter(v => v != null);
-          if (vals.length) pts.push([X(b.t0 + (i + 1) * 300), yv(vals.reduce((a, c) => a + c, 0) / vals.length)]);
+          if (vals.length) pts.push([X(b.t0 + (i + 1) * 300), yAt(vals.reduce((a, c) => a + c, 0) / vals.length, i)]);
         }
         pts.push([X(now), yv(n50.reduce((a, x) => a + cur(x), 0) / n50.length)]);
         o.strokeStyle = A('61,123,255', 0.2); o.lineWidth = 5; trace(pts, null);
@@ -458,6 +499,9 @@
         o.fillText('NIFTY 50', e[0] - 6, e[1] - 6);
         o.beginPath(); o.arc(e[0], e[1], 2.5, 0, 7); o.fill();
       }
+      o = baseCtx; // ---- back to the base layer
+      // replay the draw-in on first load and on theme change
+      if (this.revealKey !== theme()) { this.revealKey = theme(); this.revealAt = performance.now(); }
       // ranked column
       const maxAbs = Math.max(1e-6, ...b.stocks.map(x => Math.abs(x.sc)));
       o.fillStyle = A(C.ink, 0.04); o.fillRect(g.colX - 2, g.y0, g.colW + 4, H);
@@ -532,15 +576,50 @@
       const ctx = this.cv.getContext('2d');
       ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, this.cv.width, this.cv.height);
       ctx.drawImage(this.off, 0, 0);
-      const dpr = this.cv.width / this.cv.clientWidth; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const s = ts / 1000;
-      // x-ray sweep across the plot
-      const span = g.xf - g.x0, sx = g.x0 + ((s / 6) % 1) * span;
-      const gr = ctx.createLinearGradient(sx - 60, 0, sx, 0);
-      const lt = theme() === 'light';
-      gr.addColorStop(0, A(C.sweep, 0)); gr.addColorStop(1, A(C.sweep, lt ? 0.05 : 0.10));
-      ctx.fillStyle = gr; ctx.fillRect(sx - 60, g.y0, 60, g.y1 - g.y0);
-      ctx.fillStyle = A(C.sweep, lt ? 0.22 : 0.4); ctx.fillRect(sx, g.y0, 1, g.y1 - g.y0);
+      const dpr = this.cv.width / this.cv.clientWidth;
+      const s = ts / 1000, lt = theme() === 'light';
+      // draw-in: the fan grows from the open (left) to now, then bends into the column
+      const prog = RM ? 1 : Math.max(0, Math.min(1, (performance.now() - this.revealAt) / 2400));
+      const ease = 1 - Math.pow(1 - prog, 3);
+      const rx = g.x0 + ease * (g.colX - g.x0);
+      if (prog >= 1) ctx.drawImage(this.lc, 0, 0);
+      else {
+        ctx.save(); ctx.beginPath(); ctx.rect(0, 0, Math.round(rx * dpr), this.cv.height); ctx.clip();
+        ctx.drawImage(this.lc, 0, 0); ctx.restore();
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (prog < 1) { // glowing leading edge of the draw-in
+        const eg = ctx.createLinearGradient(rx - 36, 0, rx, 0);
+        eg.addColorStop(0, A(C.sweep, 0)); eg.addColorStop(1, A(C.sweep, lt ? 0.12 : 0.2));
+        ctx.fillStyle = eg; ctx.fillRect(rx - 36, g.y0, 36, g.y1 - g.y0);
+        ctx.fillStyle = A(C.ink, lt ? 0.35 : 0.6); ctx.fillRect(rx, g.y0, 1, g.y1 - g.y0);
+      } else if (!RM) {
+        // slow x-ray sweep across the plot
+        const span = g.xf - g.x0, sx = g.x0 + ((s / 7) % 1) * span;
+        const gr = ctx.createLinearGradient(sx - 70, 0, sx, 0);
+        gr.addColorStop(0, A(C.sweep, 0)); gr.addColorStop(1, A(C.sweep, lt ? 0.045 : 0.10));
+        ctx.fillStyle = gr; ctx.fillRect(sx - 70, g.y0, 70, g.y1 - g.y0);
+        ctx.fillStyle = A(C.sweep, lt ? 0.18 : 0.4); ctx.fillRect(sx, g.y0, 1, g.y1 - g.y0);
+        // light streaks along the leaders' paths (open -> now -> column)
+        for (const c of this.comets) {
+          const d0 = ((s * c.sp + c.ph) % 1) * c.len;
+          const n = c.pick ? 14 : 10;
+          for (let j = 0; j < n; j++) {
+            const d = d0 - j * 3.2; if (d < 0) break;
+            const [x, y] = along(c, d);
+            ctx.globalAlpha = (1 - j / n) * (c.pick ? 0.95 : 0.7);
+            ctx.fillStyle = j === 0 && !lt ? '#ffffff' : c.col;
+            ctx.beginPath(); ctx.arc(x, y, (c.pick ? 2.4 : 1.7) * (1 - j / (n * 1.4)), 0, 7); ctx.fill();
+          }
+        }
+        ctx.globalAlpha = 1;
+      }
+      // origin ripple: every stock starts here at the open
+      if (!RM) {
+        const ox = g.X ? g.X(this.t0) : g.x0, ph = (s * 0.6) % 1;
+        ctx.strokeStyle = A(C.ink, 0.45 * (1 - ph)); ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.arc(ox, g.yz, 3 + ph * 12, 0, 7); ctx.stroke();
+      }
       // particles on flow links
       for (const lk of this.links) {
         for (let q = 0; q < (lk.card ? 3 : 2); q++) {
@@ -560,6 +639,12 @@
       }
     },
   };
+  function along(c, d) { // point at distance d along a polyline (binary search on cumulative length)
+    let lo = 1, hi = c.cum.length - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (c.cum[m] < d) lo = m + 1; else hi = m; }
+    const a = c.path[lo - 1], z = c.path[lo], seg = (c.cum[lo] - c.cum[lo - 1]) || 1, f = (d - c.cum[lo - 1]) / seg;
+    return [a[0] + (z[0] - a[0]) * f, a[1] + (z[1] - a[1]) * f];
+  }
   function bez(p, u) {
     const v = 1 - u, a = v * v * v, b = 3 * v * v * u, c = 3 * v * u * u, d = u * u * u;
     return [a * p[0][0] + b * p[1][0] + c * p[2][0] + d * p[3][0], a * p[0][1] + b * p[1][1] + c * p[2][1] + d * p[3][1]];
@@ -800,6 +885,7 @@
     const stage = $('#stage'), pop = $('#pop');
     syncThemeButton();
     $('#theme').addEventListener('click', () => setTheme(theme() === 'light' ? 'dark' : 'light'));
+    $('#replay').addEventListener('click', () => xray.replay());
     const hit = e => e.target.closest('.tile[data-s], .card[data-s]');
     stage.addEventListener('mouseover', e => { const t = hit(e); if (t && window.innerWidth > 1100) schedulePop(t.dataset.s, t); });
     stage.addEventListener('mouseout', e => { const t = hit(e); if (t && !t.contains(e.relatedTarget)) scheduleHide(); });
